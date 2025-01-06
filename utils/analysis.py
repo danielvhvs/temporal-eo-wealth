@@ -1,3 +1,6 @@
+from typing import List, Optional, Tuple
+
+import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -5,15 +8,17 @@ import scipy
 import sklearn.metrics
 
 
-def calc_score(labels, preds, metric, weights=None):
-    '''
+def calc_score(labels: np.ndarray, preds: np.ndarray, metric: str,
+               weights: Optional[np.ndarray] = None) -> float:
+    '''TODO
+
     See https://en.wikipedia.org/wiki/Pearson_correlation_coefficient#Weighted_correlation_coefficient
     for the weighted correlation coefficient formula.
 
     Args
     - labels: np.array, shape [N]
     - preds: np.array, shape [N]
-    - score: str, one of ['r2', 'R2', 'mse', 'rank']
+    - metric: str, one of ['r2', 'R2', 'mse', 'rank']
         - 'r2': (weighted) squared Pearson correlation coefficient
         - 'R2': (weighted) coefficient of determination
         - 'mse': (weighted) mean squared-error
@@ -37,20 +42,24 @@ def calc_score(labels, preds, metric, weights=None):
                                         sample_weight=weights)
     elif metric == 'mse':
         return np.average((labels - preds) ** 2, weights=weights)
-    elif metric == 'rmse':
-        return np.average(np.sqrt((labels - preds) ** 2), weights=weights)
     elif metric == 'rank':
         return scipy.stats.spearmanr(labels, preds)[0]
     else:
         raise ValueError(f'Unknown metric: "{metric}"')
 
 
-def calc_r2(x, y):
+def calc_r2(x: np.ndarray, y: np.ndarray) -> float:
     return calc_score(labels=x, preds=y, metric='r2')
 
 
-def evaluate(labels, preds, weights=None, do_print=False, title=None):
-    '''
+def evaluate(labels: np.ndarray,
+             preds: np.ndarray,
+             weights: Optional[np.ndarray] = None,
+             do_print: bool = False,
+             title: str = None
+             ) -> Tuple[float, float, float, float]:
+    '''TODO
+
     Args
     - labels: list of labels, length N
     - preds: list of preds, length N
@@ -63,17 +72,19 @@ def evaluate(labels, preds, weights=None, do_print=False, title=None):
     r2 = calc_score(labels=labels, preds=preds, metric='r2', weights=weights)
     R2 = calc_score(labels=labels, preds=preds, metric='R2', weights=weights)
     mse = calc_score(labels=labels, preds=preds, metric='mse', weights=weights)
-    rmse = calc_score(labels=labels, preds=preds, metric='rmse', weights=weights)
     rank = calc_score(labels=labels, preds=preds, metric='rank', weights=weights)
     if do_print:
         if title is not None:
             print(f'{title}\t- ', end='')
-        print(f'r^2: {r2:0.3f}, R^2: {R2:0.3f}, mse: {mse:0.3f}, mse: {rmse:0.3f}, rank: {rank:0.3f}')
-    return r2, R2, mse, rmse, rank
+        print(f'r^2: {r2:0.3f}, R^2: {R2:0.3f}, mse: {mse:0.3f}, rank: {rank:0.3f}')
+    return r2, R2, mse, rank
 
 
-def evaluate_df(df, cols, labels_col='label', weights_col=None, index_name=None):
-    '''
+def evaluate_df(df: pd.DataFrame, cols: List[str], labels_col: str = 'label',
+                weights_col: Optional[str] = None,
+                index_name: Optional[str] = None) -> pd.DataFrame:
+    '''TODO
+
     Args
     - df: pd.DataFrame, columns include cols and labels_col
     - cols: list of str, names of cols in df to evaluate
@@ -93,11 +104,13 @@ def evaluate_df(df, cols, labels_col='label', weights_col=None, index_name=None)
         records.append(row)
     index = pd.Index(data=cols, name=index_name)
     results_df = pd.DataFrame.from_records(
-        records, columns=['r2', 'R2', 'mse', 'rmse', 'rank'], index=index)
+        records, columns=['r2', 'R2', 'mse', 'rank'], index=index)
     return results_df
 
 
-def plot_residuals(labels, preds, title=None, ax=None):
+def plot_residuals(labels: np.ndarray, preds: np.ndarray,
+                   title: Optional[str] = None,
+                   ax: Optional[matplotlib.axes.Axes] = None) -> None:
     '''Plots residuals = preds - labels.
 
     Args
@@ -121,16 +134,16 @@ def plot_residuals(labels, preds, title=None, ax=None):
     ax.set(xlabel='label', ylabel='residual')
 
 
-def sorted_scores(labels, preds, metric, sort='increasing'):
-    '''
-    Sorts (pred, label) datapoints by label using the given sorting direction,
-    then calculates the chosen score over for the first k datapoints,
-    for k = 1 to N.
+def sorted_scores(labels: np.ndarray, preds: np.ndarray, metric: str,
+                  sort: str = 'increasing') -> Tuple[np.ndarray, np.ndarray]:
+    '''Sorts (pred, label) datapoints by label using the given sorting
+    direction, then calculates the chosen score over for the first k
+    datapoints, for k = 1 to N.
 
     Args
     - labels: np.array, shape [N]
     - preds: np.array, shape [N]
-    - metric: one of ['r2', 'R2', 'mse', 'rmse', 'rank']
+    - metric: one of ['r2', 'R2', 'mse', 'rank']
     - sort: str, one of ['increasing', 'decreasing', 'random']
 
     Returns:
@@ -153,8 +166,14 @@ def sorted_scores(labels, preds, metric, sort='increasing'):
     return scores, labels_sorted
 
 
-def plot_label_vs_score(scores_list, labels_list, legends, metric, sort, figsize=(5, 4)):
-    '''
+def plot_label_vs_score(scores_list: List[np.ndarray],
+                        labels_list: List[np.ndarray],
+                        legends: List[str],
+                        metric: str,
+                        sort: str,
+                        figsize: Tuple[float, float] = (5, 4)) -> None:
+    '''TODO
+
     Args
     - scores_list: list of length num_models, each element is np.array of shape [num_examples]
     - labels_list: list of length num_models, each element is np.array of shape [num_examples]
@@ -181,8 +200,13 @@ def plot_label_vs_score(scores_list, labels_list, legends, metric, sort, figsize
     plt.show()
 
 
-def plot_percdata_vs_score(scores_list, legends, metric, sort, figsize=(5, 4)):
-    '''
+def plot_percdata_vs_score(scores_list: List[np.ndarray],
+                           legends: List[str],
+                           metric: str,
+                           sort: str,
+                           figsize: Tuple[float, float] = (5, 4)) -> None:
+    '''TODO
+
     Args
     - scores_list: list of length num_models, each element is np.array of shape [num_examples]
     - legends: list of str, length num_models
@@ -190,14 +214,13 @@ def plot_percdata_vs_score(scores_list, legends, metric, sort, figsize=(5, 4)):
     - sort: str, one of ['increasing', 'decreasing', 'random']
     - figsize: tuple (width, height), in inches
     '''
-    num_models = len(scores_list)
-    assert len(legends) == num_models
+    assert len(legends) == len(scores_list)
 
     f, ax = plt.subplots(1, 1, figsize=figsize, constrained_layout=True)
-    for i in range(num_models):
-        num_examples = len(scores_list[i])
+    for scores in scores_list:
+        num_examples = len(scores)
         percdata = np.arange(1, num_examples + 1, dtype=np.float32) / num_examples
-        ax.scatter(x=percdata, y=scores_list[i], s=1)
+        ax.scatter(x=percdata, y=scores, s=1)
     ax.set(xlabel='% of data', ylabel='metric')
     ax.set_title(f'Model Performance vs. % of data by {sort} label')
     ax.set_xlim(-0.05, 1.05)
@@ -209,14 +232,17 @@ def plot_percdata_vs_score(scores_list, legends, metric, sort, figsize=(5, 4)):
     plt.show()
 
 
-def chunk_vs_score(labels, preds, nchunks, metric, chunk_value=None):
-    '''
+def chunk_vs_score(labels: np.ndarray, preds: np.ndarray, nchunks: int,
+                   metric: str, chunk_value: Optional[np.ndarray] = None
+                   ) -> np.ndarray:
+    '''TODO
+
     Args
     - labels: np.array, shape [N]
     - preds: np.array, shape [N]
     - nchunks: int
     - metric: str, one of ['r2', 'R2', 'mse', 'rank']
-    - chunk_value: np.array, shape [N]
+    - chunk_value: np.array, shape [N], TODO
 
     Returns
     - scores: np.array, shape [nchunks]
@@ -233,9 +259,15 @@ def chunk_vs_score(labels, preds, nchunks, metric, chunk_value=None):
     return scores
 
 
-def plot_chunk_vs_score(scores, legends, metric, figsize=(5, 4), cmap=None,
-                        sort=None, xlabel='chunk of data'):
-    '''
+def plot_chunk_vs_score(scores: np.ndarray,
+                        legends: List[str],
+                        metric: str,
+                        figsize: Tuple[float, float] = (5, 4),
+                        cmap: Optional[str] = None,
+                        sort: Optional[str] = None,
+                        xlabel: Optional[str] = 'chunk of data') -> None:
+    '''TODO
+
     Args
     - scores: np.array, shape [num_models, nchunks]
     - legends: list of str, length num_models
@@ -243,6 +275,7 @@ def plot_chunk_vs_score(scores, legends, metric, figsize=(5, 4), cmap=None,
     - figsize: tuple (width, height), in inches
     - cmap: str, name of matplotlib colormap
     - sort: str, one of ['increasing', 'decreasing', None], how to sort models by metric
+    - xlabel: str
     '''
     assert len(scores) == len(legends)
     num_models, nchunks = scores.shape

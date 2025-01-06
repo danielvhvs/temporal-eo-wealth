@@ -1,9 +1,13 @@
 import heapq
+from typing import Any, Dict, List, Mapping, Optional, Union
 
 import numpy as np
+import pandas as pd
 
 
-def load_npz(path, verbose=True, check=None):
+def load_npz(path: str, verbose: bool = True,
+             check: Optional[Mapping[str, np.ndarray]] = None
+             ) -> Dict[str, np.ndarray]:
     '''Loads .npz file into a dict.
 
     Args
@@ -27,7 +31,9 @@ def load_npz(path, verbose=True, check=None):
     return result
 
 
-def colordisplay(df, columns=None, cmap='coolwarm'):
+def colordisplay(df: pd.DataFrame,
+                 columns: Optional[Union[str, List[str]]] = None,
+                 cmap: str = 'coolwarm') -> None:
     '''Displays a pandas DataFrame with background color.
 
     This function should only be called inside a Jupyter Notebook.
@@ -40,7 +46,7 @@ def colordisplay(df, columns=None, cmap='coolwarm'):
     display(df.style.background_gradient(cmap=cmap, subset=columns))
 
 
-def add_to_heap(h, k, value, data):
+def add_to_heap(h: List, k: int, value: Any, data: Any) -> None:
     '''Tracks the max k elements using a heap.
 
     We will actually use a min-heap for this task. That way, when a new element
