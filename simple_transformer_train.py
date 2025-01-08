@@ -1,9 +1,10 @@
 import numpy as np
 import os
+import argparse
 
 import torch
 from torch.utils.data import Dataset, DataLoader, Subset
-import argparse
+
 from tqdm import tqdm
 
 from transformers import AutoImageProcessor, AutoModelForImageClassification
@@ -14,39 +15,6 @@ from torchvision.transforms.functional import center_crop
 import pickle
 import scipy
 import sklearn
-import terratorch # even though we don't use the import directly, we need it so that the models are available in the timm registry
-from terratorch.models import EncoderDecoderFactory
-from terratorch.datasets import HLSBands
-
-def create_gfm():
-    model_factory = EncoderDecoderFactory()
-
-    # Let's build a segmentation model
-    # Parameters prefixed with backbone_ get passed to the backbone
-    # Parameters prefixed with decoder_ get passed to the decoder
-    # Parameters prefixed with head_ get passed to the head
-
-    model = model_factory.build_model(task="segmentation",
-            backbone="prithvi_vit_100",
-            decoder="FCNDecoder",
-            backbone_bands=[
-                HLSBands.BLUE,
-                HLSBands.GREEN,
-                HLSBands.RED,
-                HLSBands.NIR_NARROW,
-                HLSBands.SWIR_1,
-                HLSBands.SWIR_2,
-            ],
-            necks=[{"name": "SelectIndices", "indices": [-1]},
-                {"name": "ReshapeTokensToImage"}],
-            num_classes=4,
-            backbone_pretrained=True,
-            backbone_num_frames=1,
-            decoder_channels=128,
-            head_dropout=0.2
-        )
-    return model
-
 
 class NumpyDataset(Dataset):
     def __init__(self, image_dir, label_file, transform=None):
@@ -77,13 +45,16 @@ class NumpyDataset(Dataset):
         label = self.labels[idx]
 
         # Split the image into the first 6 bands and the 7th band
-        first_6_bands = image[:6, :, :]  # First 6 bands
+        first_3_bands = image[:3, :, :]  # First 6 bands
+        first_6_bands = image[3:6, :, :]  # First 6 bands
         seventh_band = image[6, :, :]  # 7th band
 
         # Center crop both the first 6 bands and the 7th band
+        first_3_bands = center_crop(torch.tensor(first_3_bands, dtype=torch.float32), (224, 224))
         first_6_bands = center_crop(torch.tensor(first_6_bands, dtype=torch.float32), (224, 224))
         seventh_band = center_crop(torch.tensor(seventh_band, dtype=torch.float32), (224, 224))
 
+        first_3_bands_norm = (first_3_bands-torch.min(first_3_bands))/(torch.max(first_3_bands)-torch.min(first_3_bands))
         first_6_bands_norm = (first_6_bands-torch.min(first_6_bands))/(torch.max(first_6_bands)-torch.min(first_6_bands))
         seventh_band_norm = (seventh_band-torch.min(seventh_band))/(torch.max(seventh_band)-torch.min(seventh_band))
 
@@ -93,33 +64,28 @@ class NumpyDataset(Dataset):
         label = torch.tensor(label, dtype=torch.float32)  # Regression values should also be float32
 
         if self.transform:
+            first_3_bands_norm = self.transform(first_3_bands_norm)
             first_6_bands_norm = self.transform(first_6_bands_norm)
             seventh_band_norm = self.transform(seventh_band_norm)
 
-        return first_6_bands_norm, seventh_band_norm, label
+        return first_3_bands_norm,first_6_bands_norm, seventh_band_norm, label
 
 # Define the combined model
 class CombinedModel(nn.Module):
-    def __init__(self, model_6_band, model_7_band, hidden_dim=128):
+    def __init__(self, model_3_band, model_6_band, model_7_band, hidden_dim=128):
         super(CombinedModel, self).__init__()
+        self.model_3_band = model_3_band
         self.model_6_band = model_6_band
         self.model_7_band = model_7_band
-        self.fc = nn.Linear(3809, hidden_dim)
+        self.fc = nn.Linear(3000, hidden_dim)
         self.regressor = nn.Linear(hidden_dim, 1)
-        self.conv = nn.Conv2d(in_channels=4,out_channels=2,kernel_size=2,stride=1)
-        self.conv2 = nn.Conv2d(in_channels=2,out_channels=1,kernel_size=3,stride=1)
-        self.pool = nn.MaxPool2d(kernel_size=2)
-        self.flatten = nn.Flatten()
 
-    def forward(self, input_6_band, input_7_band):
-        output_6_band = self.model_6_band(input_6_band).output
-        output_6_band = self.pool(output_6_band)
-        output_6_band = self.conv(output_6_band)
-        output_6_band = self.pool(output_6_band)
-        output_6_band = self.conv2(output_6_band)
-        output_6_band = self.flatten(output_6_band)
+    def forward(self, input_3_band, input_6_band, input_7_band):
+        output_3_band = self.model_3_band(**input_3_band)
+        output_6_band = self.model_6_band(**input_6_band)
+
         output_7_band = self.model_7_band(**input_7_band)
-        combined = torch.cat((output_6_band, output_7_band.logits), dim=1)
+        combined = torch.cat((output_3_band.logits,output_6_band.logits, output_7_band.logits), dim=1)
         hidden = torch.relu(self.fc(combined))
         regression_output = self.regressor(hidden)
         return regression_output
@@ -155,7 +121,7 @@ def calc_score(labels: np.ndarray, preds: np.ndarray, metric: str) -> float:
     else:
         raise ValueError(f'Unknown metric: "{metric}"')
 
-def run_model(fold,naming):
+def run_model(fold):
     folds_pickle_path = 'data/dhs_incountry_folds.pkl'
     with open(folds_pickle_path, 'rb') as f:
         incountry_folds = pickle.load(f)
@@ -181,19 +147,23 @@ def run_model(fold,naming):
     test_dataloader = DataLoader(dataset_test, batch_size=batch_size, shuffle=False)
 
     # Load the models and processor
+
+    processor_3_band = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224")
+    model_3_band = AutoModelForImageClassification.from_pretrained("google/vit-base-patch16-224")
+
+
     processor_6_band = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224")
     model_6_band = AutoModelForImageClassification.from_pretrained("google/vit-base-patch16-224")
 
     processor_7_band = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224")
     model_7_band = AutoModelForImageClassification.from_pretrained("google/vit-base-patch16-224")
 
-    model_prit = create_gfm()
 
     device = "cuda"
     # Define the combined model
-    combined_model = CombinedModel(model_prit, model_7_band)
+    combined_model = CombinedModel(model_3_band,model_6_band, model_7_band)
     combined_model = combined_model.cuda()
-    optimizer = optim.Adam(combined_model.parameters(), lr=1e-6)
+    optimizer = optim.Adam(combined_model.parameters(), lr=1e-4)
     criterion = nn.MSELoss().cuda()
 
     num_epochs = 20
@@ -203,53 +173,47 @@ def run_model(fold,naming):
     val_metrics = []
     for epoch in range(num_epochs):
         labellist,predlist = [],[]
-        for first_6_bands, seventh_band, labels in tqdm(train_dataloader):
+        for first_3_bands, first_6_bands, seventh_band, labels in tqdm(train_dataloader):
             # Prepare the images using the processors
             # inputs_6_band = processor_6_band(first_6_bands, return_tensors="pt",do_rescale=False)
-            inputs_6_band = first_6_bands
+            inputs_3_band = processor_3_band(first_3_bands, return_tensors="pt",do_rescale=False)
+            inputs_6_band = processor_6_band(first_6_bands, return_tensors="pt",do_rescale=False)
             inputs_7_band = processor_7_band(seventh_band, return_tensors="pt",do_rescale=False)
 
+            inputs_3_band = inputs_3_band.to(torch.device(device))
             inputs_6_band = inputs_6_band.to(torch.device(device))
             inputs_7_band = inputs_7_band.to(torch.device(device))
 
             # Forward pass
-            predictions = combined_model(inputs_6_band, inputs_7_band)
+            predictions = combined_model(inputs_3_band,inputs_6_band, inputs_7_band)
             loss = criterion(predictions.squeeze(), labels.to(torch.device(device)))
 
             # Backward pass
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-            
-            with open(f"{naming}_train_loss{fold}.txt","a") as f:
-                f.write(f"{loss}\n")
-            
             labels,predictions = labels.cpu().detach().numpy().reshape((1,-1))[0], predictions.cpu().detach().numpy().reshape((1,-1))[0]
-
+        
             labellist += list(labels)
             predlist += list(predictions)
         labellist, predlist = np.array(labellist),np.array(predlist)
         train_metrics.append([calc_score(labellist,predlist,'r2'),calc_score(labellist,predlist,'R2'),\
                                     calc_score(labellist,predlist,'mse'),calc_score(labellist,predlist,'rank')])
-        # if epoch % 1 == 0 or epoch==num_epochs-1:
-        if True:
+        if epoch % 2 == 0 or epoch==num_epochs-1:
             with torch.no_grad():
                 labellist,predlist = [],[]
-                for first_6_bands, seventh_band, labels in tqdm(val_dataloader):
+                for first_3_bands, first_6_bands, seventh_band, labels in tqdm(val_dataloader):
                     # Prepare the images using the processors
                     # inputs_6_band = processor_6_band(first_6_bands, return_tensors="pt",do_rescale=False)
-                    inputs_6_band = first_6_bands
+                    inputs_3_band = processor_3_band(first_3_bands, return_tensors="pt",do_rescale=False)
+                    inputs_6_band = processor_6_band(first_6_bands, return_tensors="pt",do_rescale=False)
                     inputs_7_band = processor_7_band(seventh_band, return_tensors="pt",do_rescale=False)
 
+                    inputs_3_band = inputs_3_band.to(torch.device(device))
                     inputs_6_band = inputs_6_band.to(torch.device(device))
                     inputs_7_band = inputs_7_band.to(torch.device(device))
 
-                    predictions = combined_model(inputs_6_band, inputs_7_band)
-
-                    loss = criterion(predictions.squeeze(), labels.to(torch.device(device)))
-                    with open(f"{naming}_vall_loss{fold}.txt","a") as f:
-                        f.write(f"{loss}\n")
-
+                    predictions = combined_model(inputs_3_band,inputs_6_band, inputs_7_band)
                     labels,predictions = labels.cpu().detach().numpy().reshape((1,-1))[0], predictions.cpu().detach().numpy().reshape((1,-1))[0]
                 
                     labellist += list(labels)
@@ -261,26 +225,27 @@ def run_model(fold,naming):
         print("epoch done:", epoch)
         print(val_metrics[-1],"\n")
 
-    with open(f"{naming}_train_results{fold}.txt","w") as f:
+    with open(f"simple_train_results{fold}.txt","w") as f:
         for i in range(len(train_metrics)):
             f.write(f"{train_metrics[i][0]}\t{train_metrics[i][1]}\t{train_metrics[i][2]}\t{train_metrics[i][3]}\n")
-    with open(f"{naming}_val_results{fold}.txt","w") as f:
+    with open(f"simple_val_results{fold}.txt","w") as f:
         for i in range(len(val_metrics)):
             f.write(f"{val_metrics[i][0]}\t{val_metrics[i][1]}\t{val_metrics[i][2]}\t{val_metrics[i][3]}\n")
 
     with torch.no_grad():
         labellist,predlist = [],[]
-        for first_6_bands, seventh_band, labels in tqdm(test_dataloader):
+        for first_3_bands, first_6_bands, seventh_band, labels in tqdm(test_dataloader):
             # Prepare the images using the processors
             # inputs_6_band = processor_6_band(first_6_bands, return_tensors="pt",do_rescale=False)
-            inputs_6_band = first_6_bands
+            inputs_3_band = processor_3_band(first_3_bands, return_tensors="pt",do_rescale=False)
+            inputs_6_band = processor_6_band(first_6_bands, return_tensors="pt",do_rescale=False)
             inputs_7_band = processor_7_band(seventh_band, return_tensors="pt",do_rescale=False)
 
+            inputs_3_band = inputs_3_band.to(torch.device(device))
             inputs_6_band = inputs_6_band.to(torch.device(device))
             inputs_7_band = inputs_7_band.to(torch.device(device))
 
-            predictions = combined_model(inputs_6_band, inputs_7_band)
-
+            predictions = combined_model(inputs_3_band,inputs_6_band, inputs_7_band)
             labels,predictions = labels.cpu().detach().numpy().reshape((1,-1))[0], predictions.cpu().detach().numpy().reshape((1,-1))[0]
         
             labellist += list(labels)
@@ -289,26 +254,18 @@ def run_model(fold,naming):
         test_metrics = [calc_score(labellist,predlist,'r2'),calc_score(labellist,predlist,'R2'),\
                                     calc_score(labellist,predlist,'mse'),calc_score(labellist,predlist,'rank')]
 
-    with open(f"{naming}_test_results{fold}.txt","w") as f:
+    with open(f"simple_test_results{fold}.txt","w") as f:
         f.write(f"{test_metrics[0]}\t{test_metrics[1]}\t{test_metrics[2]}\t{test_metrics[3]}\n")
 
 # Example usage
 if __name__ == "__main__":
-    # folds = ["A","B","C","D","E"]
-    # # folds = ["A"]
-    # for fold in folds:
-    #     run_model(fold)
+    folds = ["A","B","C","D","E"]
+    # folds = ["A"]
 
     parser = argparse.ArgumentParser()
     # paths
     parser.add_argument(
         '--fold', default='A',
         help='folds to run')
-    
-    parser.add_argument(
-        '--name', default='def',
-        help='name for this run')
-
     args = parser.parse_args()
-
-    run_model(args.fold,args.name)
+    run_model(args.fold)
